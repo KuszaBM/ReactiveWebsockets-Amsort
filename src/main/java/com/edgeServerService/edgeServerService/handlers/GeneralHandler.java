@@ -1,10 +1,8 @@
 package com.edgeServerService.edgeServerService.handlers;
 
 
-import com.edgeServerService.edgeServerService.industry.DemoObject;
-import com.edgeServerService.edgeServerService.industry.PhsWebsocketMessage;
-import com.edgeServerService.edgeServerService.industry.SinksHolder;
-import com.edgeServerService.edgeServerService.industry.WebsocketHoldingEntity;
+import com.edgeServerService.edgeServerService.industry.*;
+import com.edgeServerService.edgeServerService.industry.entities.Container;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -18,66 +16,40 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
-import java.awt.image.DataBuffer;
-import java.time.Duration;
 import java.util.*;
 
 @Component
-public class ExampleHandler implements WebSocketHandler {
-
-//    private Sinks.Many<String> sink;
-//    private Flux<String> fluxOutput;
-//    public ExampleHandler() {
-//        sink = Sinks.many().multicast().directBestEffort();
-//        fluxOutput = sink.asFlux();
-//    }
-
-
-    private Logger log = LoggerFactory.getLogger("ExampleHandler");
+public class GeneralHandler implements WebSocketHandler {
+    private Logger log = LoggerFactory.getLogger("GeneralHandler");
     private final SinksHolder sinksHolder;
     private final ObjectMapper mapper;
+    private final PhsAdapter phsAdapter;
     private final Map<String, PhsWebsocketMessage<?>> messagesCache = new HashMap<>();
     private final InboundMessageHandler messageHandler;
 
     @Autowired
-    public ExampleHandler(SinksHolder sinksHolder, InboundMessageHandler messageHandler) {
+    public GeneralHandler(SinksHolder sinksHolder, PhsAdapter phsAdapter, InboundMessageHandler messageHandler) {
         super();
         this.sinksHolder = sinksHolder;
+        this.phsAdapter = phsAdapter;
         this.messageHandler = messageHandler;
         this.mapper = new ObjectMapper();
     }
-
-    private boolean tryToParseMessage(String message) {
-        try {
-            mapper.readValue(message, PhsWebsocketMessage.class);
-            return true;
-        } catch (JsonProcessingException e) {
-            log.info("exception while parsing to PHS websocketMessage ");
-        }
-        return false;
-    }
-
-    public void sendToClient(int id, String messageType, Object messageData) {
-        ObjectMapper mapper = new ObjectMapper();
-        PhsWebsocketMessage message = new PhsWebsocketMessage(messageType, messageData);
-        try {
-            String json = mapper.writeValueAsString(message);
-            WebsocketHoldingEntity holdingEntity = sinksHolder.getById(id);
-            if(holdingEntity != null)
-                holdingEntity.getSink().tryEmitNext(json);
-            else
-                throw new NoSuchElementException("No element with id: " + id);
-        } catch (JsonProcessingException e) {
-            log.info("exc - ", e);
-        }
+    public void sendToClient(int id, PhsWebsocketMessage<?> message) {
+        String json = serializeToJson(message);
+        WebsocketHoldingEntity holdingEntity = sinksHolder.getById(id);
+        if(holdingEntity != null)
+            holdingEntity.getSink().tryEmitNext(json);
+        else
+            throw new NoSuchElementException("No element with id: " + id);
     }
     public void sendToClients(PhsWebsocketMessage<?> message) {
-        String json = null;
-            json = serializeToJson(message);
-            log.info("new msg - {} | {}", json, message.data.getClass().getName());
+        String json = serializeToJson(message);
+        //Adding message to cache, so it will be sent to new connected clients too
         sinksHolder.cacheMessage(message.type, message);
         for(WebsocketHoldingEntity holdingEntity : sinksHolder.getAll()) {
             try {
+                //Taking sink specified for each client and sanding message to client
                 holdingEntity.getSink().tryEmitNext(json);
             } catch (Exception e) {
                 log.info("Exception while sending message to - {}", holdingEntity.getSession().getHandshakeInfo().getRemoteAddress());
@@ -98,12 +70,12 @@ public class ExampleHandler implements WebSocketHandler {
             } else {
                 return true;
             }
-        }).filter(this::tryToParseMessage).map(msg -> {
+        }).filter(PhsWebsocketMessageVerifier::tryToParseMessage).map(msg -> {
             PhsWebsocketMessage<?> message = null;
             try {
                 message = mapper.readValue(msg, PhsWebsocketMessage.class);
             } catch (JsonProcessingException e) {
-                log.info("exception while parsing to PHS websocketMessage ");
+                log.info("exception while parsing to PHS websocketMessage");
             }
             return message;
         }).filter(Objects::nonNull).map(messageHandler::handle).doOnNext(sink::tryEmitNext).then();
@@ -114,6 +86,11 @@ public class ExampleHandler implements WebSocketHandler {
         log.info("info 2 - {}", session.getHandshakeInfo().getUri());
         log.info("info 3 - {}", session.getHandshakeInfo().getLogPrefix());
         sink.tryEmitNext(session.getId());
+        List<Container> containers = new ArrayList<>();
+        phsAdapter.getAllContainers().doOnNext(containers::add).doOnComplete(() -> {
+            sink.tryEmitNext(serializeToJson(new PhsWebsocketMessage<>("CONTAINER_ARRAY", containers)));
+        }).subscribe();
+
         try {
             for (PhsWebsocketMessage<?> msg : sinksHolder.getAllCachedMessage()) {
                 sink.tryEmitNext(serializeToJson(msg));

@@ -1,5 +1,7 @@
 package com.edgeServerService.edgeServerService.configs;
 
+import com.edgeServerService.edgeServerService.handlers.GeneralHandler;
+import com.edgeServerService.edgeServerService.handlers.UserSpecifiedHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.HandlerMapping;
@@ -13,10 +15,10 @@ import java.util.Map;
 @Configuration
 public class WebSocketConfig {
     @Bean
-    public HandlerMapping webSocketHandlerMapping(WebSocketHandler webSocketHandler) {
+    public HandlerMapping webSocketHandlerMapping(GeneralHandler generalHandler, UserSpecifiedHandler userSpecifiedHandler) {
         Map<String, WebSocketHandler> map = new HashMap<>();
-        map.put("/general", webSocketHandler);
-        map.put("/user/{user}/station", webSocketHandler);
+        map.put("/general", generalHandler);
+        map.put("/user/{user}/station", userSpecifiedHandler);
         int order = -1; // before annotated controllers
 
         return new SimpleUrlHandlerMapping(map, order);
